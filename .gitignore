@@ -1,0 +1,42 @@
+# Private dictionaries: only the explicitly named synthetic sample is public.
+*.[cC][sS][vV]
+*.[tT][sS][vV]
+!/samples/tags.example.csv
+
+# Local user data and backups.
+/private/
+/local-data/
+/imports/
+/exports/
+/backups/
+generation-tag-autocomplete-backup*.json
+gta-backup*.json
+*.backup.json
+
+# Credentials and machine-local configuration.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Dependencies, builds, generated test output and caches.
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+.cache/
+.vite/
+.local/
+*.log
+__pycache__/
+
+# Editor and OS state.
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
