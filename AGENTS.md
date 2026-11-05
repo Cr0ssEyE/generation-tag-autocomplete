@@ -4,7 +4,7 @@
 
 Build Generation Tag AutoComplete, an Android browser PWA described in `docs/SPECIFICATION.md`. Read that specification and `docs/CSV_FORMAT.md` before implementation. Record material scope changes in the specification.
 
-The first version uses separate search and raw positive/negative editors, plus a Search/History tab switch. It does not include tag chips, AND search, automatic underscore conversion, weight handling, direct generation-server access, cloud synchronization, or APK packaging.
+The editor uses a Positive/Negative tab switch with live completion for the current comma/newline item. A collapsible auxiliary panel retains Bookmarks/Type browsing/History tabs. Main navigation stays fixed at the top. It does not include tag chips, AND search, automatic underscore conversion, weight handling, direct generation-server access, cloud synchronization, or APK packaging.
 
 ## Local user data
 
@@ -29,6 +29,6 @@ The first version uses separate search and raw positive/negative editors, plus a
 
 ## Validation and reporting
 
-At the preparation stage no app toolchain exists. Add toolchain commands and pinned dependencies when implementation starts. Do not claim application tests or device checks have passed before they run. Follow `docs/IMPLEMENTATION_PLAN.md` for meaningful validation.
+Use Node.js 24 and pnpm 11.25.0. Run `pnpm test` and `pnpm build` for logic changes. Runtime dependencies are pinned in package.json and pnpm-lock.yaml. Do not claim application tests or device checks have passed before they run. Follow `docs/IMPLEMENTATION_PLAN.md` for meaningful validation.
 
 Retain upstream copyright and license notices when reusing code; update `THIRD_PARTY_NOTICES.md` and include required notices in distributed assets.

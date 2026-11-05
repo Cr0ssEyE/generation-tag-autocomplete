@@ -1,6 +1,6 @@
 # GitHub 저장소 생성 준비
 
-기준일: 2026-11-05. 이 문서는 원격 저장소와 향후 배포를 위한 설정을 정리한다. 연결 계정과 저장소 주소는 확인했으며 Pages는 아직 배포하지 않았다.
+기준일: 2026-11-05. 이 문서는 원격 저장소와 향후 배포를 위한 설정을 정리한다. 연결 계정과 저장소 주소는 확인했으며 GitHub Actions 기반 Pages 배포가 활성화되어 있다.
 
 ## 1. 권장 설정
 
@@ -15,7 +15,7 @@
 | 기본 브랜치 | `main` |
 | 라이선스 | MIT |
 | 배포 | GitHub Pages, 프로젝트 사이트 |
-| 예정 Pages 주소 | `https://cr0sseye.github.io/generation-tag-autocomplete/` (미배포) |
+| Pages 주소 | `https://cr0sseye.github.io/generation-tag-autocomplete/` |
 
 계정과 저장소 이름은 GitHub 연결 계정과 생성 화면에서 확인한다. 같은 이름의 저장소가 이미 있으면 기존 내용을 확인하고 연결 대상을 결정한다. 기존 저장소를 임의로 덮어쓰지 않는다.
 
