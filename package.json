@@ -1,0 +1,9 @@
+{
+  "name": "generation-tag-autocomplete",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {"dev":"vite --host 127.0.0.1", "build":"tsc --noEmit && vite build && node scripts/make-sw.mjs", "preview":"vite preview --host 127.0.0.1", "test":"node --experimental-strip-types --test tests/*.test.ts"},
+  "dependencies": {"papaparse":"5.7.0"},
+  "devDependencies": {"@types/papaparse":"5.5.2", "typescript":"7.0.2", "vite":"8.3.5"}
+}
