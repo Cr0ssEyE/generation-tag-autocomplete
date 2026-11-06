@@ -9,14 +9,18 @@ import {
   type SearchRow,
 } from "./model.ts";
 let indexed: SearchRow[] = [];
+let loadGeneration = 0;
 const send = (value: unknown) => self.postMessage(value);
 self.onmessage = async (event: MessageEvent) => {
   const { kind, id } = event.data;
   try {
     if (kind === "load") {
+      const generation = ++loadGeneration;
+      indexed = [];
       const rows = event.data.dictionaryId
         ? await get<Row[]>("rows", event.data.dictionaryId)
         : [];
+      if (generation !== loadGeneration) return;
       indexed = indexRows(rows ?? []);
       send({ kind: "loaded", id });
     }
@@ -32,6 +36,7 @@ self.onmessage = async (event: MessageEvent) => {
       send({ kind: "browse-results", id, rows });
     }
     if (kind === "import") {
+      ++loadGeneration;
       const file = event.data.file as File;
       send({ kind: "progress", id, message: "UTF-8 파일 읽는 중…" });
       const bytes = await file.arrayBuffer();

@@ -19,6 +19,14 @@ import {
 } from "./storage.ts";
 import { makeBackup, validateBackup } from "./backup.ts";
 import { view } from "./view.ts";
+import { LatestSearch } from "./latest-search.ts";
+import {
+  applyCompletionIntent,
+  applyInsertionIntent,
+  type InsertionIntent,
+  type CompletionIntent,
+} from "./ime-completion.ts";
+import { loadPromptDraft, type SavedPromptText } from "./prompt-load.ts";
 import {
   completionContext,
   completionState,
@@ -60,6 +68,32 @@ let latestInline = 0,
   inlineComposing = false;
 let inlineSide: Side = "positive";
 let inlinePending = false;
+let inlineKey = "",
+  inlineRowsKey = "",
+  loadId = 0;
+const inlineQueue = new LatestSearch<{
+  kind: "search";
+  id: number;
+  query: string;
+  filter: string;
+}>((request) => worker.postMessage(request));
+type PendingIME = (
+  | { mode: "complete"; intent: CompletionIntent }
+  | { mode: "insert"; intent: InsertionIntent }
+) & { ended: boolean; clicked: boolean };
+let pendingIME: PendingIME | null = null;
+let imeExpiry = 0,
+  imeSettle = 0;
+let currentPage = "editor",
+  finderOpen = false,
+  finderKeyboard = false;
+let restoreFinderSearch = false;
+type FinderTab = AppData["settings"]["tab"];
+const finderPositions: Partial<
+  Record<FinderTab, { list: number; body: number }>
+> = {};
+let previewPrompt: SavedPromptText | null = null,
+  previewBusy = false;
 const undoStack: Record<Side, { text: string; selection: [number, number] }[]> =
   { positive: [], negative: [] };
 const labels: Record<string, string> = {
@@ -74,7 +108,7 @@ $("app").innerHTML = view;
 
 let noticeTimer = 0;
 function notice(message: string, error = false) {
-  clearTimeout(noticeTimer);
+  window.clearTimeout(noticeTimer);
   $("notice").textContent = message;
   $("notice").hidden = false;
   $("notice").classList.toggle("error", error);
@@ -97,11 +131,11 @@ function status(message: string) {
 function changed() {
   revision++;
   status("저장 대기…");
-  clearTimeout(saveTimer);
+  window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => void flush(), 300);
 }
 async function flush() {
-  clearTimeout(saveTimer);
+  window.clearTimeout(saveTimer);
   if (!readyToSave) return false;
   if (revision === savedRevision) {
     await saveQueue;
@@ -133,6 +167,9 @@ async function flush() {
   return success;
 }
 function page(name: string) {
+  if (name !== "editor") setFinderOpen(false, false, false);
+  currentPage = name;
+  cancelIME();
   document
     .querySelectorAll<HTMLElement>(".page")
     .forEach((el) => (el.hidden = el.id !== `page-${name}`));
@@ -147,6 +184,7 @@ function page(name: string) {
   void flush();
   if (name === "library") renderLibrary();
   if (name === "settings") void storageInfo();
+  updateKeyboardLayout();
 }
 function renderTarget() {
   for (const side of ["positive", "negative"] as const) {
@@ -157,7 +195,7 @@ function renderTarget() {
     tab.tabIndex = active ? 0 : -1;
     document.querySelector<HTMLButtonElement>(
       `[data-undo="${side}"]`,
-    )!.disabled = !undoStack[side].length;
+    )!.disabled = !undoStack[side].length || inlineComposing;
     $(`${side}-count`).textContent = `${fmt(data.draft[side].length)}자`;
   }
   $("target-label").textContent =
@@ -215,13 +253,14 @@ function rowHTML(
   return `<article class="tag-row">
     <div class="tag-top"><div class="tag-title"><strong>${esc(row.tag)}</strong><span class="meta">${metadata}</span></div>
       <button class="star ${favorite ? "is-favorite" : ""}" data-favorite="${esc(row.tag)}" aria-label="${esc(row.tag)} 북마크" aria-pressed="${favorite}">${favorite ? "★" : "☆"}</button>
-      <button class="add-button" ${completing ? "data-complete" : "data-insert"}="${esc(row.tag)}" ${used ? "disabled" : ""}>${state === "matching" ? "일치" : used ? "사용 중" : completing ? "대체" : "+ 추가"}</button>
+      <button class="add-button" ${completing ? "data-complete" : "data-insert"}="${esc(row.tag)}" ${used || (completing && inlineRowsKey !== inlineKey) ? "disabled" : ""}>${state === "matching" ? "일치" : used ? "사용 중" : completing ? "대체" : "+ 추가"}</button>
       ${history ? `<button class="icon-button" data-history-delete="${esc(row.tag)}" aria-label="${esc(row.tag)} 기록 삭제">×</button>` : ""}
     </div>
     ${"description" in row ? `<details class="description"><summary>${esc(row.description || "설명 없음")}</summary><p>${esc(row.description || "설명 없음")}</p></details>` : ""}
   </article>`;
 }
 function renderResults() {
+  if (pendingIME?.mode === "insert") return;
   let html = "";
   if (data.settings.tab === "history")
     html =
@@ -242,16 +281,22 @@ function renderResults() {
   $("history-count").textContent = fmt(data.history.length);
 }
 function renderInline() {
+  if (pendingIME?.mode === "complete") return;
   let message = "";
   if (!data.settings.dictionaryId)
     message = "사전 관리에서 CSV를 가져오거나 선택하세요.";
   else if (loading) message = "사전 준비 중…";
-  else if (inlineComposing) message = "한글 입력 확정 후 검색합니다.";
   else if (!inlineContext)
     message =
       "태그 또는 한글 설명을 입력하세요. 괄호·가중치 구문은 자동완성하지 않습니다.";
-  else if (inlinePending) message = "검색 중…";
-  else if (!inlineRows.length) message = "일치하는 태그가 없습니다.";
+  else if (!inlineRows.length)
+    message = inlinePending ? "검색 중…" : "일치하는 태그가 없습니다.";
+  $("completion-status").textContent = inlinePending
+    ? "검색 중…"
+    : inlineComposing
+      ? "조합 중인 입력으로 검색한 후보입니다."
+      : "";
+  $("completion-results").setAttribute("aria-busy", String(inlinePending));
   $("completion-results").innerHTML = message
     ? `<p class="empty-line">${message}</p>`
     : inlineRows.map((row) => rowHTML(row, false, true)).join("");
@@ -260,31 +305,36 @@ function renderInline() {
     : "현재 항목의 태그 후보";
 }
 function requestInline() {
-  clearTimeout(inlineTimer);
-  latestInline = ++seq;
-  inlineRows = [];
   inlineSide = data.draft.target;
   inlineContext = completionContext(
     data.draft[inlineSide],
     data.draft.selection[inlineSide],
   );
-  inlinePending =
-    !inlineComposing &&
-    !loading &&
-    !!inlineContext &&
-    !!data.settings.dictionaryId;
-  renderInline();
-  if (
-    inlineComposing ||
-    loading ||
-    !inlineContext ||
-    !data.settings.dictionaryId
-  )
+  const key = JSON.stringify([
+    data.settings.dictionaryId,
+    inlineSide,
+    inlineContext?.query,
+  ]);
+  if (key === inlineKey && !loading && inlineContext) {
+    renderInline();
     return;
+  }
+  inlineKey = key;
+  window.clearTimeout(inlineTimer);
+  inlineQueue.clear();
+  latestInline = ++seq;
+  inlinePending = !loading && !!inlineContext && !!data.settings.dictionaryId;
+  if (!inlinePending) {
+    inlineRows = [];
+    inlineRowsKey = "";
+    renderInline();
+    return;
+  }
+  renderInline();
   const id = latestInline,
-    query = inlineContext.query;
+    query = inlineContext!.query;
   inlineTimer = window.setTimeout(
-    () => worker.postMessage({ kind: "search", id, query, filter: "" }),
+    () => inlineQueue.submit({ kind: "search", id, query, filter: "" }),
     120,
   );
 }
@@ -296,8 +346,25 @@ function rememberUndo(side: Side) {
   if (undoStack[side].length > 20) undoStack[side].shift();
 }
 function complete(tag: string) {
-  if (inlineComposing || inlineSide !== data.draft.target || !inlineContext)
+  if (pendingIME?.mode === "complete" && pendingIME.intent.tag === tag) {
+    pendingIME.clicked = true;
+    if (inlineComposing) $<HTMLTextAreaElement>(pendingIME.intent.side).blur();
+    settleIMEPick();
     return;
+  }
+  if (
+    pendingIME ||
+    inlineRowsKey !== inlineKey ||
+    inlineSide !== data.draft.target ||
+    !inlineContext
+  )
+    return;
+  if (inlineComposing) {
+    beginIMEPick(tag);
+    if (pendingIME) (pendingIME as PendingIME).clicked = true;
+    $<HTMLTextAreaElement>(inlineSide).blur();
+    return;
+  }
   const side = data.draft.target;
   const next = completeTag(
     data.draft[side],
@@ -306,6 +373,13 @@ function complete(tag: string) {
     tag,
   );
   if (!next) return;
+  applyInline(side, tag, next);
+}
+function applyInline(
+  side: Side,
+  tag: string,
+  next: { text: string; selection: [number, number] },
+) {
   rememberUndo(side);
   data.draft[side] = next.text;
   data.draft.selection[side] = next.selection;
@@ -315,9 +389,125 @@ function complete(tag: string) {
   requestInline();
   $<HTMLTextAreaElement>(side).focus({ preventScroll: true });
 }
+function cancelIME() {
+  window.clearTimeout(imeExpiry);
+  window.clearTimeout(imeSettle);
+  pendingIME = null;
+}
+function beginIMEPick(tag: string) {
+  if (!inlineContext || inlineRowsKey !== inlineKey) return;
+  cancelIME();
+  pendingIME = {
+    mode: "complete",
+    ended: false,
+    clicked: false,
+    intent: {
+      text: data.draft[inlineSide],
+      side: inlineSide,
+      dictionary: data.settings.dictionaryId,
+      context: { ...inlineContext },
+      tag,
+    },
+  };
+  armIMEExpiry();
+}
+function beginIMEInsertion(tags: string[]) {
+  cancelIME();
+  const side = data.draft.target;
+  pendingIME = {
+    mode: "insert",
+    ended: false,
+    clicked: false,
+    intent: {
+      text: data.draft[side],
+      side,
+      dictionary: data.settings.dictionaryId,
+      tags,
+    },
+  };
+  armIMEExpiry();
+}
+function armIMEExpiry() {
+  imeExpiry = window.setTimeout(() => {
+    if (!pendingIME) return;
+    cancelIME();
+    notice("입력 확정 후 최신 후보를 다시 선택하세요.");
+    requestInline();
+    renderResults();
+  }, 900);
+}
+function settleIMEPick() {
+  if (!pendingIME?.ended || !pendingIME.clicked) return;
+  window.clearTimeout(imeSettle);
+  // Native compositionend may be followed by one final input event in this task.
+  imeSettle = window.setTimeout(() => {
+    const pending = pendingIME;
+    if (!pending?.ended || inlineComposing) return;
+    const { intent } = pending;
+    const box = $<HTMLTextAreaElement>(intent.side);
+    cancelIME();
+    let applied = false;
+    if (
+      currentPage === "editor" &&
+      pending.mode === "complete" &&
+      !finderOpen
+    ) {
+      const next = applyCompletionIntent(
+        pending.intent,
+        box.value,
+        [box.selectionStart, box.selectionEnd],
+        data.draft.target,
+        data.settings.dictionaryId,
+      );
+      if (next) {
+        applyInline(intent.side, pending.intent.tag, next);
+        applied = true;
+      }
+    } else if (currentPage === "editor" && pending.mode === "insert") {
+      const next = applyInsertionIntent(
+        pending.intent,
+        box.value,
+        [box.selectionStart, box.selectionEnd],
+        data.draft.target,
+        data.settings.dictionaryId,
+      );
+      if (next) {
+        publishInsertion(intent.side, next);
+        applied = true;
+      }
+    }
+    if (!applied) {
+      notice("입력 위치가 바뀌었습니다. 최신 후보를 다시 선택하세요.");
+      requestInline();
+    }
+    renderResults();
+    renderInline();
+  }, 32);
+}
 function insert(tags: string[]) {
+  if (pendingIME) {
+    if (
+      pendingIME.mode === "insert" &&
+      pendingIME.intent.tags.join("\0") === tags.join("\0")
+    ) {
+      pendingIME.clicked = true;
+      if (inlineComposing)
+        $<HTMLTextAreaElement>(pendingIME.intent.side).blur();
+      settleIMEPick();
+    }
+    return;
+  }
+  if (inlineComposing) {
+    beginIMEInsertion(tags);
+    if (pendingIME) (pendingIME as PendingIME).clicked = true;
+    $<HTMLTextAreaElement>(data.draft.target).blur();
+    return;
+  }
   const side = data.draft.target;
   const result = insertTags(data.draft[side], data.draft.selection[side], tags);
+  publishInsertion(side, result);
+}
+function publishInsertion(side: Side, result: ReturnType<typeof insertTags>) {
   if (!result.inserted.length) {
     notice("현재 편집기에 이미 사용 중인 태그입니다.");
     return;
@@ -334,7 +524,8 @@ function insert(tags: string[]) {
   );
 }
 function requestSearch() {
-  clearTimeout(searchTimer);
+  restoreFinderSearch = false;
+  window.clearTimeout(searchTimer);
   if (composing) return;
   const query = $<HTMLInputElement>("query").value;
   latest = ++seq;
@@ -355,10 +546,14 @@ function requestSearch() {
 }
 
 function startWorker() {
+  inlineQueue.reset();
   worker = new Worker(new URL("./dictionary.worker.ts", import.meta.url), {
     type: "module",
   });
   worker.onerror = () => {
+    inlineQueue.reset();
+    inlineKey = "";
+    inlinePending = false;
     loading = false;
     notice(
       "사전 작업이 중단되었습니다. 다시 선택하거나 파일을 다시 가져오세요.",
@@ -388,8 +583,9 @@ function startWorker() {
       notice("사전을 이 기기에 저장했습니다.");
       setImportDisabled(false);
     }
-    if (message.kind === "loaded") {
+    if (message.kind === "loaded" && message.id === loadId) {
       loading = false;
+      inlineKey = "";
       requestSearch();
       requestInline();
     }
@@ -397,14 +593,29 @@ function startWorker() {
       results = message.rows;
       $("search-meta").textContent = `${results.length}개 후보`;
       renderResults();
+      if (restoreFinderSearch) {
+        restoreFinderPosition();
+        restoreFinderSearch = false;
+      }
     }
-    if (message.kind === "results" && message.id === latestInline) {
-      inlinePending = false;
-      inlineRows = message.rows;
-      renderInline();
+    if (message.kind === "results") {
+      if (message.id === latestInline) {
+        inlinePending = false;
+        inlineRows = message.rows;
+        inlineRowsKey = inlineKey;
+        renderInline();
+      }
+      inlineQueue.finish(message.id);
     }
     if (message.kind === "error") {
+      inlineQueue.finish(message.id);
+      if (![loadId, importId, latestInline, latest].includes(message.id))
+        return;
       loading = false;
+      inlinePending = false;
+      inlineRows = [];
+      inlineKey = inlineRowsKey = "";
+      renderInline();
       $("cancel-import").hidden = true;
       setImportDisabled(false);
       notice(message.message, true);
@@ -422,16 +633,20 @@ function setImportDisabled(value: boolean) {
     .forEach((x) => (x.disabled = value));
 }
 async function loadActive() {
+  cancelIME();
+  inlineQueue.reset();
+  inlineKey = "";
+  inlineRowsKey = "";
   loading = true;
   latest = ++seq;
-  clearTimeout(searchTimer);
-  clearTimeout(inlineTimer);
+  window.clearTimeout(searchTimer);
+  window.clearTimeout(inlineTimer);
   latestInline = ++seq;
   inlineRows = [];
   renderInline();
   worker.postMessage({
     kind: "load",
-    id: ++seq,
+    id: (loadId = ++seq),
     dictionaryId: data.settings.dictionaryId,
   });
 }
@@ -446,6 +661,10 @@ function importFile(file: File, replaceId?: string) {
   }
   loading = true;
   importId = ++seq;
+  cancelIME();
+  inlineQueue.reset();
+  inlineKey = inlineRowsKey = "";
+  window.clearTimeout(inlineTimer);
   latest = ++seq;
   latestInline = ++seq;
   inlineRows = [];
@@ -523,6 +742,151 @@ function exportBackup() {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 let pendingRestore: AppData | null = null;
+const preview = $<HTMLDialogElement>("prompt-preview");
+function previewStatus(message: string, error = false) {
+  $("preview-status").textContent = message;
+  $("preview-status").classList.toggle("error", error);
+}
+function openPromptPreview(prompt: SavedPromptText) {
+  previewPrompt = { ...prompt };
+  $("prompt-preview-title").textContent = prompt.name;
+  previewStatus("");
+  for (const side of ["positive", "negative"] as Side[]) {
+    $<HTMLTextAreaElement>(`preview-${side}`).value = prompt[side];
+    $(`preview-${side}-empty`).hidden = !!prompt[side];
+    document.querySelector<HTMLButtonElement>(
+      `[data-preview-copy="${side}"]`,
+    )!.disabled = !prompt[side];
+  }
+  updateKeyboardLayout();
+  preview.showModal();
+}
+function closePromptPreview() {
+  if (!previewBusy) preview.close();
+}
+$("preview-close").onclick = $("preview-cancel").onclick = closePromptPreview;
+preview.addEventListener("cancel", (event) => {
+  if (previewBusy) event.preventDefault();
+});
+preview.addEventListener("close", () => {
+  previewPrompt = null;
+});
+preview.addEventListener("click", (event) => {
+  const bounds = preview.getBoundingClientRect();
+  if (
+    event.target === preview &&
+    (event.clientX < bounds.left ||
+      event.clientX > bounds.right ||
+      event.clientY < bounds.top ||
+      event.clientY > bounds.bottom)
+  )
+    closePromptPreview();
+});
+$("preview-load").onclick = async () => {
+  if (!previewPrompt || previewBusy) return;
+  const prompt = previewPrompt;
+  previewBusy = true;
+  preview
+    .querySelectorAll<HTMLButtonElement>("button")
+    .forEach((button) => (button.disabled = true));
+  previewStatus("저장 중…");
+  try {
+    if (!(await flush()))
+      throw new Error(
+        "현재 초안을 저장하지 못했습니다. 내용을 보관한 뒤 다시 시도하세요.",
+      );
+    const next = await loadPromptDraft(data, prompt, saveApp);
+    data = next;
+    window.clearTimeout(saveTimer);
+    revision++;
+    savedRevision = revision;
+    undoStack.positive = [];
+    undoStack.negative = [];
+    syncEditors();
+    previewBusy = false;
+    preview.close();
+    page("editor");
+    requestInline();
+    status("✓ 이 기기에 저장됨");
+    notice("양쪽 초안을 저장한 프롬프트로 교체했습니다.");
+  } catch (error) {
+    previewStatus(
+      error instanceof Error
+        ? error.message
+        : "저장하지 못했습니다. 기존 초안을 유지합니다.",
+      true,
+    );
+    status("불러오기 실패 · 기존 초안 유지");
+  } finally {
+    previewBusy = false;
+    preview.querySelectorAll<HTMLButtonElement>("button").forEach((button) => {
+      const side = button.dataset.previewCopy as Side | undefined;
+      button.disabled = !!side && !prompt[side];
+    });
+  }
+};
+
+function saveFinderPosition() {
+  finderPositions[data.settings.tab] = {
+    list: $("results").scrollTop,
+    body: $("finder-body").scrollTop,
+  };
+}
+function restoreFinderPosition() {
+  const position = finderPositions[data.settings.tab];
+  $("results").scrollTop = position?.list ?? 0;
+  $("finder-body").scrollTop = position?.body ?? 0;
+}
+function setFinderOpen(open: boolean, keyboard = false, returnFocus = true) {
+  if (open === finderOpen) return;
+  cancelIME();
+  if (open) {
+    const box = $<HTMLTextAreaElement>(data.draft.target);
+    if (document.activeElement === box) {
+      data.draft.selection[data.draft.target] = [
+        box.selectionStart,
+        box.selectionEnd,
+      ];
+    }
+    finderKeyboard = keyboard;
+  } else saveFinderPosition();
+  finderOpen = open;
+  $("finder-panel").hidden = $("finder-scrim").hidden = !open;
+  $("finder-toggle").setAttribute("aria-expanded", String(open));
+  $("finder-toggle").setAttribute(
+    "aria-label",
+    open ? "태그 찾기 닫기" : "태그 찾기 열기",
+  );
+  document.documentElement.classList.toggle("finder-open", open);
+  updateKeyboardLayout();
+  if (open) {
+    renderResults();
+    restoreFinderPosition();
+    if (keyboard) $("finder-close").focus({ preventScroll: true });
+  } else if (
+    returnFocus &&
+    (finderKeyboard || $("finder-panel").contains(document.activeElement))
+  ) {
+    $("finder-toggle").focus({ preventScroll: true });
+  }
+}
+$("finder-toggle").onclick = (event) =>
+  setFinderOpen(!finderOpen, event.detail === 0);
+$("finder-close").onclick = () => setFinderOpen(false);
+$("finder-scrim").onclick = () => setFinderOpen(false);
+document.addEventListener("keydown", (event) => {
+  if (
+    event.key === "Escape" &&
+    finderOpen &&
+    !event.isComposing &&
+    !$<HTMLDialogElement>("name-dialog").open &&
+    !preview.open
+  ) {
+    event.preventDefault();
+    setFinderOpen(false);
+  }
+});
+
 async function storageInfo() {
   try {
     const estimate = await navigator.storage.estimate();
@@ -543,6 +907,7 @@ document.addEventListener("click", async (event) => {
   if (ds.page) page(ds.page);
   if (ds.go) page(ds.go);
   if (ds.target) {
+    cancelIME();
     inlineComposing = false;
     data.draft.target = ds.target as Side;
     renderTarget();
@@ -550,6 +915,23 @@ document.addEventListener("click", async (event) => {
     changed();
   }
   if (ds.complete) complete(ds.complete);
+  if (ds.previewCopy && previewPrompt) {
+    const side = ds.previewCopy as Side;
+    try {
+      await navigator.clipboard.writeText(previewPrompt[side]);
+      previewStatus(
+        `${side === "positive" ? "긍정" : "부정"} 프롬프트를 복사했습니다.`,
+      );
+    } catch {
+      const box = $<HTMLTextAreaElement>(`preview-${side}`);
+      box.focus();
+      box.select();
+      previewStatus(
+        "자동 복사가 거부되었습니다. 선택한 원문을 길게 눌러 수동으로 복사하세요.",
+        true,
+      );
+    }
+  }
   if (ds.undo) {
     const side = ds.undo as Side,
       previous = undoStack[side].pop();
@@ -634,24 +1016,7 @@ document.addEventListener("click", async (event) => {
   }
   if (ds.loadPrompt) {
     const p = data.prompts.find((x) => x.id === ds.loadPrompt);
-    if (
-      p &&
-      (await flush()) &&
-      confirm("현재 양쪽 초안을 저장한 프롬프트로 교체할까요?")
-    ) {
-      data.draft.positive = p.positive;
-      data.draft.negative = p.negative;
-      data.draft.selection = {
-        positive: [p.positive.length, p.positive.length],
-        negative: [p.negative.length, p.negative.length],
-      };
-      undoStack.positive = [];
-      undoStack.negative = [];
-      syncEditors();
-      changed();
-      requestInline();
-      page("editor");
-    }
+    if (p) openPromptPreview(p);
   }
   if (ds.deletePrompt && confirm("저장한 프롬프트를 삭제할까요?")) {
     data.prompts = data.prompts.filter((x) => x.id !== ds.deletePrompt);
@@ -683,6 +1048,11 @@ for (const side of ["positive", "negative"] as const) {
     data.draft.target = side;
     data.draft.selection[side] = [box.selectionStart, box.selectionEnd];
     if (moved) {
+      const compositionCaretCollapse =
+        previous[0] !== previous[1] &&
+        box.selectionStart === previous[1] &&
+        box.selectionEnd === previous[1];
+      if (pendingIME?.ended && !compositionCaretCollapse) cancelIME();
       renderTarget();
       changed();
       requestInline();
@@ -696,6 +1066,7 @@ for (const side of ["positive", "negative"] as const) {
     renderTarget();
     requestInline();
     changed();
+    if (pendingIME) settleIMEPick();
   });
   for (const event of ["focus", "click", "keyup", "select"])
     box.addEventListener(event, () => {
@@ -703,14 +1074,36 @@ for (const side of ["positive", "negative"] as const) {
     });
   box.addEventListener("selectionchange", remember);
   box.addEventListener("compositionstart", () => {
+    cancelIME();
     inlineComposing = true;
-    clearTimeout(inlineTimer);
-    latestInline = ++seq;
-    inlineRows = [];
-    renderInline();
+    renderTarget();
+    requestInline();
+  });
+  box.addEventListener("compositionupdate", () => {
+    // Read the actual control after its compositionupdate default processing.
+    queueMicrotask(() => {
+      if (data.draft[side] !== box.value) {
+        data.draft[side] = box.value;
+        data.draft.selection[side] = [box.selectionStart, box.selectionEnd];
+        changed();
+      }
+      requestInline();
+    });
   });
   box.addEventListener("compositionend", () => {
     inlineComposing = false;
+    const modified =
+      data.draft[side] !== box.value ||
+      data.draft.selection[side][0] !== box.selectionStart ||
+      data.draft.selection[side][1] !== box.selectionEnd;
+    data.draft[side] = box.value;
+    data.draft.selection[side] = [box.selectionStart, box.selectionEnd];
+    if (modified) changed();
+    renderTarget();
+    if (pendingIME?.intent.side === side) {
+      pendingIME.ended = true;
+      settleIMEPick();
+    }
     remember();
     requestInline();
   });
@@ -720,12 +1113,31 @@ for (const side of ["positive", "negative"] as const) {
   });
 }
 document.addEventListener("pointerdown", (event) => {
-  if (
-    (event.target as HTMLElement).closest("[data-complete]") &&
-    !inlineComposing
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>(
+    "button",
+  );
+  if (!button || button.disabled) return;
+  if (button.dataset.complete) {
+    if (inlineComposing) beginIMEPick(button.dataset.complete);
+    else event.preventDefault();
+  }
+  if (finderOpen && button.dataset.insert && inlineComposing) {
+    beginIMEInsertion([button.dataset.insert]);
+  } else if (
+    button.id === "finder-toggle" ||
+    (finderOpen &&
+      (button.dataset.insert ||
+        button.dataset.favorite ||
+        button.dataset.historyDelete))
   )
     event.preventDefault();
 });
+document.addEventListener("pointercancel", () => {
+  cancelIME();
+  renderResults();
+  renderInline();
+});
+
 document.querySelectorAll<HTMLElement>('[role="tablist"]').forEach((group) =>
   group.addEventListener("keydown", (event) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
@@ -747,7 +1159,7 @@ document.querySelectorAll<HTMLElement>('[role="tablist"]').forEach((group) =>
 const query = $<HTMLInputElement>("query");
 query.addEventListener("compositionstart", () => {
   composing = true;
-  clearTimeout(searchTimer);
+  window.clearTimeout(searchTimer);
   latest = ++seq;
 });
 query.addEventListener("compositionend", () => {
@@ -761,18 +1173,26 @@ $("type-filter").addEventListener("change", () => {
   requestSearch();
 });
 $("search-tab").onclick = () => {
+  saveFinderPosition();
   data.settings.tab = "search";
   renderTabs();
+  restoreFinderPosition();
+  requestSearch();
+  restoreFinderSearch = true;
   changed();
 };
 $("bookmark-tab").onclick = () => {
+  saveFinderPosition();
   data.settings.tab = "bookmarks";
   renderTabs();
+  restoreFinderPosition();
   changed();
 };
 $("history-tab").onclick = () => {
+  saveFinderPosition();
   data.settings.tab = "history";
   renderTabs();
+  restoreFinderPosition();
   changed();
 };
 $("clear-history").onclick = () => {
@@ -900,6 +1320,33 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("pagehide", () => void flush());
 function updateKeyboardLayout() {
+  const viewport = window.visualViewport;
+  const top = viewport?.offsetTop ?? 0,
+    left = viewport?.offsetLeft ?? 0;
+  const height = viewport?.height ?? window.innerHeight,
+    width = viewport?.width ?? window.innerWidth;
+  const surfaceTop = Math.max(
+    top,
+    document.querySelector(".main-nav")!.getBoundingClientRect().bottom,
+  );
+  const surfaceHeight = Math.max(0, top + height - surfaceTop);
+  const finderWidth = Math.min(480, Math.max(0, width - 56));
+  const values = {
+    "--view-left": left,
+    "--view-width": width,
+    "--view-center": left + width / 2,
+    "--surface-top": surfaceTop,
+    "--surface-height": surfaceHeight,
+    "--finder-width": finderWidth,
+    "--finder-left": left + width - 56 - finderWidth,
+    "--finder-button-left": left + width - 50,
+    "--finder-button-top": surfaceTop + Math.max(0, (surfaceHeight - 56) / 2),
+    "--dialog-top": top + 12,
+    "--dialog-height": Math.max(0, height - 24),
+  };
+  for (const [name, value] of Object.entries(values))
+    document.documentElement.style.setProperty(name, `${value}px`);
+  $("finder-panel").classList.toggle("compact", surfaceHeight < 400);
   document.body.classList.toggle(
     "keyboard-open",
     !!window.visualViewport &&
@@ -908,6 +1355,9 @@ function updateKeyboardLayout() {
   );
 }
 window.visualViewport?.addEventListener("resize", updateKeyboardLayout);
+window.visualViewport?.addEventListener("scroll", updateKeyboardLayout);
+window.addEventListener("resize", updateKeyboardLayout);
+updateKeyboardLayout();
 document.addEventListener("focusin", updateKeyboardLayout);
 document.addEventListener("focusout", updateKeyboardLayout);
 let installEvent: any = null;

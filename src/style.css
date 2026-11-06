@@ -148,7 +148,7 @@ a {
 }
 .workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 20px;
   align-items: start;
 }
@@ -281,6 +281,13 @@ a {
   border-top: 1px solid #e7ece5;
   background: #fafcf8;
 }
+.completion-status {
+  min-height: 20px;
+  margin: 0;
+  padding: 0 18px 5px;
+  font-size: 11px;
+  color: var(--muted);
+}
 .tag-row {
   border-top: 1px solid #e7ece5;
   padding: 11px 18px;
@@ -357,18 +364,90 @@ a {
 .description[open] p {
   margin: 7px 0 0;
 }
-.finder > summary {
-  padding: 16px 18px;
-  cursor: pointer;
-  font-weight: 650;
+.finder-toggle {
+  position: fixed;
+  z-index: 45;
+  left: var(--finder-button-left, calc(100% - 50px));
+  top: var(--finder-button-top, 45vh);
+  min-width: 44px;
+  min-height: 56px;
+  width: 44px;
+  padding: 6px;
+  line-height: 1.5;
+  background: var(--green);
+  color: #fff;
+  border-color: var(--green);
+  box-shadow: 0 2px 9px #142c2630;
+  transform: translateX(calc(0px - env(safe-area-inset-right, 0px)));
 }
-.finder > summary > span {
-  display: inline-block;
-  margin-left: 8px;
-  font-weight: 400;
+.finder-toggle:hover {
+  background: #105448;
 }
-.finder[open] > summary {
+.finder-toggle[aria-expanded="true"] {
+  background: #fff;
+  color: var(--green);
+}
+.finder-scrim {
+  position: fixed;
+  z-index: 39;
+  top: var(--surface-top, 56px);
+  left: var(--view-left, 0px);
+  width: var(--view-width, 100%);
+  height: var(--surface-height, calc(100dvh - 56px));
+  background: #142c2644;
+  touch-action: none;
+}
+.finder {
+  position: fixed;
+  z-index: 40;
+  top: var(--surface-top, 56px);
+  left: var(--finder-left, 0px);
+  width: var(--finder-width, calc(100% - 56px));
+  height: var(--surface-height, calc(100dvh - 56px));
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 5px 35px #142c2633;
+  border-radius: 0 10px 10px 0;
+  overscroll-behavior: contain;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.finder-title,
+.preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  flex-shrink: 0;
   border-bottom: 1px solid var(--border);
+}
+.finder-title button {
+  min-height: 44px;
+}
+.finder-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+.finder-controls {
+  flex-shrink: 0;
+}
+.finder .results {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+}
+.finder.compact .finder-body {
+  display: block;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.finder.compact .results {
+  overflow: visible;
+}
+html.finder-open {
+  overflow: hidden;
 }
 .finder-heading {
   padding: 14px 18px;
@@ -618,6 +697,87 @@ dialog input {
 dialog .actions {
   justify-content: flex-end;
 }
+.prompt-preview {
+  position: fixed;
+  left: var(--view-center, 50%);
+  top: var(--dialog-top, 12px);
+  transform: translateX(-50%);
+  margin: 0;
+  padding: 0;
+  width: min(700px, calc(var(--view-width, 100vw) - 24px));
+  max-height: var(--dialog-height, calc(100dvh - 24px));
+  overflow: hidden;
+}
+.prompt-preview[open] {
+  display: flex;
+  flex-direction: column;
+}
+.preview-header h2 {
+  margin: 0;
+  font-size: 17px;
+  overflow-wrap: anywhere;
+}
+.preview-body {
+  padding: 0 16px 12px;
+  overflow-y: auto;
+  min-height: 0;
+  overscroll-behavior: contain;
+}
+.preview-warning {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+.preview-section + .preview-section {
+  margin-top: 16px;
+}
+.preview-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+.preview-heading label {
+  font-weight: 600;
+}
+.preview-heading button {
+  font-size: 12px;
+}
+.preview-section textarea {
+  display: block;
+  width: 100%;
+  height: 120px;
+  min-height: 70px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 10px;
+  font-size: 16px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.preview-section p {
+  line-height: 1.6;
+}
+.preview-footer {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+#preview-status {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--green);
+  overflow-wrap: anywhere;
+}
+#preview-status.error {
+  color: #91442f;
+}
 @media (max-width: 760px) {
   .shell {
     padding: 0 12px;
@@ -714,12 +874,6 @@ dialog .actions {
     gap: 5px;
   }
   .description {
-    font-size: 11px;
-  }
-  .finder > summary {
-    padding: 14px;
-  }
-  .finder > summary > span {
     font-size: 11px;
   }
   .library-grid {

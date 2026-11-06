@@ -2,14 +2,14 @@
 
 - 문서 버전: 0.4
 - 기준일: 2026-11-06
-- 상태: 앱 0.2.0은 초기 구현·관리자 기능 검증 완료. 본 문서 0.4의 후속 UI/UX 개선은 명세 작성 완료·구현 대기. 기존 검증과 신규 작업을 구분하며 모든 수용 기준의 실측 완료를 의미하지 않음.
+- 상태: 앱 0.3.0의 UI/UX 개선 구현·자동 검증 완료. 신규 Android 실기기 회귀 검증 대기. 기존 0.2.0 관리자 결과와 구분하며 모든 수용 기준의 실측 완료를 의미하지 않음.
 - 앱 이름: Generation Tag AutoComplete
 - 한글 설명: 이미지 생성 프롬프트 작성 보조 툴
 - 저장소: Public, 권장 이름 `generation-tag-autocomplete`
 - 배포: GitHub Pages 기반 정적 웹/PWA
 - 코드 라이선스: MIT
 
-이번 변경의 상세 동작·구현 순서·신규 수용 기준 U01–U14는 [UI/UX 개선 작업 명세서](UI_UX_IMPROVEMENTS.md)를 따른다. 아래는 후속 구현에 적용할 전체 기능 계약이며, 현재 배포 앱에 모두 반영된 상태를 뜻하지 않는다.
+이번 변경의 상세 동작·구현 순서·신규 수용 기준 U01–U14는 [UI/UX 개선 작업 명세서](UI_UX_IMPROVEMENTS.md)를 따른다. 구현 여부와 실제 기기 검증 여부는 [TESTING.md](TESTING.md)에 구분한다.
 
 ## 1. 목적과 사용 흐름
 
@@ -220,4 +220,4 @@ TypeScript 7.0.2, Vite 8.3.5, Papa Parse 5.7.0을 사용한다. Node.js 24와 pn
 | 복원 | 사용자 데이터 전체 교체, 로컬 CSV 보관소는 보존 |
 | 표시 이름 | Generation Tag AutoComplete / 이미지 생성 프롬프트 작성 보조 툴 |
 
-GitHub 운영 정보는 [GITHUB_SETUP.md](GITHUB_SETUP.md), 실제 검증 환경과 결과는 [TESTING.md](TESTING.md)에 기록한다. 본 문서의 후속 작업 계획과 현재 배포 앱 0.2.0의 실행 결과를 구분한다.
+GitHub 운영 정보는 [GITHUB_SETUP.md](GITHUB_SETUP.md), 실제 검증 환경과 결과는 [TESTING.md](TESTING.md)에 기록한다. 앱 0.3.0 자동 검증과 기존 0.2.0 실기기 결과를 구분한다.
