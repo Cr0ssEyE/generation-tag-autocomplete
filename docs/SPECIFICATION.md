@@ -1,8 +1,8 @@
 # Generation Tag AutoComplete 작업 명세서
 
 - 문서 버전: 0.3
-- 기준일: 2026-11-05
-- 상태: 앱 0.2.0 구현. 검증 결과와 남은 기기 테스트는 TESTING.md에 기록.
+- 기준일: 2026-11-06
+- 상태: 앱 0.2.0 초기 구현·관리자 기능 검증 완료. 검증 근거와 추가 진단 항목은 TESTING.md에 기록. 모든 수용 기준의 실측 완료를 의미하지 않음.
 - 앱 이름: Generation Tag AutoComplete
 - 한글 설명: 이미지 생성 프롬프트 작성 보조 툴
 - 저장소: Public, 권장 이름 `generation-tag-autocomplete`
