@@ -94,7 +94,7 @@ export const view = `
       <section class="panel settings-panel"><h3>홈 화면 · 오프라인</h3><p id="offline-status">앱 리소스 준비 중…</p><button id="install-app" hidden>홈 화면에 설치</button><p class="small muted">설치 버튼이 없으면 Chrome 메뉴의 ‘홈 화면에 추가’를 사용하세요.</p><a href="./LICENSE" target="_blank" rel="noopener">MIT 라이선스</a> · <a href="./THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener">외부 저작물 고지</a></section>
     </div>
   </section>
-  <footer class="footer">Generation Tag AutoComplete · 0.3.0</footer>
+  <footer class="footer">Generation Tag AutoComplete · 0.3.1</footer>
 </main>
 <dialog id="name-dialog"><form method="dialog"><h2 id="dialog-title">이름을 붙여 저장</h2><label>이름<input id="item-name" maxlength="100" required autocomplete="off"></label><div class="actions"><button value="cancel" formnovalidate>취소</button><button value="save" class="primary">저장</button></div></form></dialog>
 <dialog id="prompt-preview" class="prompt-preview" aria-labelledby="prompt-preview-title">

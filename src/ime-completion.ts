@@ -32,7 +32,7 @@ export interface CompletionIntent {
   tag: string;
 }
 
-/** A real composition end may collapse the selection; it must not change the item. */
+/** A candidate can only replace the same text, item, target and dictionary. */
 export function applyCompletionIntent(
   intent: CompletionIntent,
   text: string,

@@ -23,14 +23,12 @@ import { LatestSearch } from "./latest-search.ts";
 import {
   applyCompletionIntent,
   applyInsertionIntent,
-  type InsertionIntent,
-  type CompletionIntent,
 } from "./ime-completion.ts";
+import { handoverEditor, isCurrentEditor } from "./editor-host.ts";
 import { loadPromptDraft, type SavedPromptText } from "./prompt-load.ts";
 import {
   completionContext,
   completionState,
-  completeTag,
   type CompletionContext,
 } from "./completion.ts";
 
@@ -77,15 +75,9 @@ const inlineQueue = new LatestSearch<{
   query: string;
   filter: string;
 }>((request) => worker.postMessage(request));
-type PendingIME = (
-  | { mode: "complete"; intent: CompletionIntent }
-  | { mode: "insert"; intent: InsertionIntent }
-) & { ended: boolean; clicked: boolean };
-let pendingIME: PendingIME | null = null;
-let imeExpiry = 0,
-  imeSettle = 0;
-let currentPage = "editor",
-  finderOpen = false,
+let renderedInline = "",
+  renderedResults = "";
+let finderOpen = false,
   finderKeyboard = false;
 let restoreFinderSearch = false;
 type FinderTab = AppData["settings"]["tab"];
@@ -168,8 +160,6 @@ async function flush() {
 }
 function page(name: string) {
   if (name !== "editor") setFinderOpen(false, false, false);
-  currentPage = name;
-  cancelIME();
   document
     .querySelectorAll<HTMLElement>(".page")
     .forEach((el) => (el.hidden = el.id !== `page-${name}`));
@@ -260,7 +250,6 @@ function rowHTML(
   </article>`;
 }
 function renderResults() {
-  if (pendingIME?.mode === "insert") return;
   let html = "";
   if (data.settings.tab === "history")
     html =
@@ -277,11 +266,13 @@ function renderResults() {
     html =
       results.map((row) => rowHTML(row)).join("") ||
       `<p class="empty-line">${loading ? "사전 준비 중…" : "일치하는 태그가 없습니다."}</p>`;
-  $("results").innerHTML = html;
+  if (html !== renderedResults) {
+    $("results").innerHTML = html;
+    renderedResults = html;
+  }
   $("history-count").textContent = fmt(data.history.length);
 }
 function renderInline() {
-  if (pendingIME?.mode === "complete") return;
   let message = "";
   if (!data.settings.dictionaryId)
     message = "사전 관리에서 CSV를 가져오거나 선택하세요.";
@@ -297,9 +288,13 @@ function renderInline() {
       ? "조합 중인 입력으로 검색한 후보입니다."
       : "";
   $("completion-results").setAttribute("aria-busy", String(inlinePending));
-  $("completion-results").innerHTML = message
+  const html = message
     ? `<p class="empty-line">${message}</p>`
     : inlineRows.map((row) => rowHTML(row, false, true)).join("");
+  if (html !== renderedInline) {
+    $("completion-results").innerHTML = html;
+    renderedInline = html;
+  }
   $("completion-meta").textContent = inlineContext
     ? `현재 항목: ${inlineContext.query}`
     : "현재 항목의 태그 후보";
@@ -346,34 +341,47 @@ function rememberUndo(side: Side) {
   if (undoStack[side].length > 20) undoStack[side].shift();
 }
 function complete(tag: string) {
-  if (pendingIME?.mode === "complete" && pendingIME.intent.tag === tag) {
-    pendingIME.clicked = true;
-    if (inlineComposing) $<HTMLTextAreaElement>(pendingIME.intent.side).blur();
-    settleIMEPick();
-    return;
-  }
   if (
-    pendingIME ||
     inlineRowsKey !== inlineKey ||
     inlineSide !== data.draft.target ||
     !inlineContext
   )
     return;
-  if (inlineComposing) {
-    beginIMEPick(tag);
-    if (pendingIME) (pendingIME as PendingIME).clicked = true;
-    $<HTMLTextAreaElement>(inlineSide).blur();
+  const side = inlineSide;
+  const box = $<HTMLTextAreaElement>(side);
+  const next = applyCompletionIntent(
+    {
+      text: data.draft[side],
+      side,
+      dictionary: data.settings.dictionaryId,
+      context: { ...inlineContext },
+      tag,
+    },
+    box.value,
+    [box.selectionStart, box.selectionEnd],
+    data.draft.target,
+    data.settings.dictionaryId,
+  );
+  if (!next) {
+    requestInline();
     return;
   }
-  const side = data.draft.target;
-  const next = completeTag(
-    data.draft[side],
-    data.draft.selection[side],
-    inlineContext,
-    tag,
-  );
-  if (!next) return;
   applyInline(side, tag, next);
+}
+function updateEditorHost(side: Side, focus: boolean) {
+  const box = $<HTMLTextAreaElement>(side);
+  if (inlineComposing) {
+    inlineComposing = false;
+    handoverEditor(
+      box,
+      data.draft[side],
+      data.draft.selection[side],
+      (next) => bindEditor(side, next),
+      focus,
+    );
+  }
+  syncEditors();
+  if (focus) $<HTMLTextAreaElement>(side).focus({ preventScroll: true });
 }
 function applyInline(
   side: Side,
@@ -384,128 +392,25 @@ function applyInline(
   data.draft[side] = next.text;
   data.draft.selection[side] = next.selection;
   data.history = recordUsage(data.history, [tag]);
-  syncEditors();
+  updateEditorHost(side, true);
   changed();
   requestInline();
-  $<HTMLTextAreaElement>(side).focus({ preventScroll: true });
 }
-function cancelIME() {
-  window.clearTimeout(imeExpiry);
-  window.clearTimeout(imeSettle);
-  pendingIME = null;
-}
-function beginIMEPick(tag: string) {
-  if (!inlineContext || inlineRowsKey !== inlineKey) return;
-  cancelIME();
-  pendingIME = {
-    mode: "complete",
-    ended: false,
-    clicked: false,
-    intent: {
-      text: data.draft[inlineSide],
-      side: inlineSide,
-      dictionary: data.settings.dictionaryId,
-      context: { ...inlineContext },
-      tag,
-    },
-  };
-  armIMEExpiry();
-}
-function beginIMEInsertion(tags: string[]) {
-  cancelIME();
+function insert(tags: string[]) {
   const side = data.draft.target;
-  pendingIME = {
-    mode: "insert",
-    ended: false,
-    clicked: false,
-    intent: {
+  const result = applyInsertionIntent(
+    {
       text: data.draft[side],
       side,
       dictionary: data.settings.dictionaryId,
       tags,
     },
-  };
-  armIMEExpiry();
-}
-function armIMEExpiry() {
-  imeExpiry = window.setTimeout(() => {
-    if (!pendingIME) return;
-    cancelIME();
-    notice("입력 확정 후 최신 후보를 다시 선택하세요.");
-    requestInline();
-    renderResults();
-  }, 900);
-}
-function settleIMEPick() {
-  if (!pendingIME?.ended || !pendingIME.clicked) return;
-  window.clearTimeout(imeSettle);
-  // Native compositionend may be followed by one final input event in this task.
-  imeSettle = window.setTimeout(() => {
-    const pending = pendingIME;
-    if (!pending?.ended || inlineComposing) return;
-    const { intent } = pending;
-    const box = $<HTMLTextAreaElement>(intent.side);
-    cancelIME();
-    let applied = false;
-    if (
-      currentPage === "editor" &&
-      pending.mode === "complete" &&
-      !finderOpen
-    ) {
-      const next = applyCompletionIntent(
-        pending.intent,
-        box.value,
-        [box.selectionStart, box.selectionEnd],
-        data.draft.target,
-        data.settings.dictionaryId,
-      );
-      if (next) {
-        applyInline(intent.side, pending.intent.tag, next);
-        applied = true;
-      }
-    } else if (currentPage === "editor" && pending.mode === "insert") {
-      const next = applyInsertionIntent(
-        pending.intent,
-        box.value,
-        [box.selectionStart, box.selectionEnd],
-        data.draft.target,
-        data.settings.dictionaryId,
-      );
-      if (next) {
-        publishInsertion(intent.side, next);
-        applied = true;
-      }
-    }
-    if (!applied) {
-      notice("입력 위치가 바뀌었습니다. 최신 후보를 다시 선택하세요.");
-      requestInline();
-    }
-    renderResults();
-    renderInline();
-  }, 32);
-}
-function insert(tags: string[]) {
-  if (pendingIME) {
-    if (
-      pendingIME.mode === "insert" &&
-      pendingIME.intent.tags.join("\0") === tags.join("\0")
-    ) {
-      pendingIME.clicked = true;
-      if (inlineComposing)
-        $<HTMLTextAreaElement>(pendingIME.intent.side).blur();
-      settleIMEPick();
-    }
-    return;
-  }
-  if (inlineComposing) {
-    beginIMEInsertion(tags);
-    if (pendingIME) (pendingIME as PendingIME).clicked = true;
-    $<HTMLTextAreaElement>(data.draft.target).blur();
-    return;
-  }
-  const side = data.draft.target;
-  const result = insertTags(data.draft[side], data.draft.selection[side], tags);
-  publishInsertion(side, result);
+    $<HTMLTextAreaElement>(side).value,
+    data.draft.selection[side],
+    data.draft.target,
+    data.settings.dictionaryId,
+  );
+  if (result) publishInsertion(side, result);
 }
 function publishInsertion(side: Side, result: ReturnType<typeof insertTags>) {
   if (!result.inserted.length) {
@@ -516,7 +421,10 @@ function publishInsertion(side: Side, result: ReturnType<typeof insertTags>) {
   data.draft[side] = result.text;
   data.draft.selection[side] = result.selection;
   data.history = recordUsage(data.history, result.inserted);
-  syncEditors();
+  updateEditorHost(
+    side,
+    document.activeElement === $<HTMLTextAreaElement>(side),
+  );
   changed();
   requestInline();
   notice(
@@ -633,7 +541,6 @@ function setImportDisabled(value: boolean) {
     .forEach((x) => (x.disabled = value));
 }
 async function loadActive() {
-  cancelIME();
   inlineQueue.reset();
   inlineKey = "";
   inlineRowsKey = "";
@@ -661,7 +568,6 @@ function importFile(file: File, replaceId?: string) {
   }
   loading = true;
   importId = ++seq;
-  cancelIME();
   inlineQueue.reset();
   inlineKey = inlineRowsKey = "";
   window.clearTimeout(inlineTimer);
@@ -839,7 +745,6 @@ function restoreFinderPosition() {
 }
 function setFinderOpen(open: boolean, keyboard = false, returnFocus = true) {
   if (open === finderOpen) return;
-  cancelIME();
   if (open) {
     const box = $<HTMLTextAreaElement>(data.draft.target);
     if (document.activeElement === box) {
@@ -907,7 +812,6 @@ document.addEventListener("click", async (event) => {
   if (ds.page) page(ds.page);
   if (ds.go) page(ds.go);
   if (ds.target) {
-    cancelIME();
     inlineComposing = false;
     data.draft.target = ds.target as Side;
     renderTarget();
@@ -1036,10 +940,13 @@ document.addEventListener("click", async (event) => {
     changed();
   }
 });
-for (const side of ["positive", "negative"] as const) {
-  const box = $<HTMLTextAreaElement>(side);
+function bindEditor(side: Side, box: HTMLTextAreaElement) {
+  const listen = (type: string, listener: (event: Event) => void) =>
+    box.addEventListener(type, (event) => {
+      if (isCurrentEditor(box)) listener(event);
+    });
   const remember = () => {
-    if (document.activeElement !== box) return false;
+    if (!isCurrentEditor(box) || document.activeElement !== box) return false;
     const previous = data.draft.selection[side];
     const moved =
       data.draft.target !== side ||
@@ -1048,50 +955,43 @@ for (const side of ["positive", "negative"] as const) {
     data.draft.target = side;
     data.draft.selection[side] = [box.selectionStart, box.selectionEnd];
     if (moved) {
-      const compositionCaretCollapse =
-        previous[0] !== previous[1] &&
-        box.selectionStart === previous[1] &&
-        box.selectionEnd === previous[1];
-      if (pendingIME?.ended && !compositionCaretCollapse) cancelIME();
       renderTarget();
       changed();
       requestInline();
     }
     return moved;
   };
-  box.addEventListener("input", () => {
-    undoStack[side] = [];
+  listen("input", (event) => {
+    if (data.draft[side] !== box.value) undoStack[side] = [];
     data.draft[side] = box.value;
+    if (data.draft.target === side)
+      inlineComposing = (event as InputEvent).isComposing;
     remember();
+    data.draft.selection[side] = [box.selectionStart, box.selectionEnd];
     renderTarget();
     requestInline();
     changed();
-    if (pendingIME) settleIMEPick();
   });
-  for (const event of ["focus", "click", "keyup", "select"])
-    box.addEventListener(event, () => {
-      remember();
-    });
-  box.addEventListener("selectionchange", remember);
-  box.addEventListener("compositionstart", () => {
-    cancelIME();
-    inlineComposing = true;
+  for (const type of ["focus", "click", "keyup", "select", "selectionchange"])
+    listen(type, remember);
+  listen("compositionstart", () => {
+    if (data.draft.target === side) inlineComposing = true;
     renderTarget();
     requestInline();
   });
-  box.addEventListener("compositionupdate", () => {
-    // Read the actual control after its compositionupdate default processing.
+  listen("compositionupdate", () =>
     queueMicrotask(() => {
+      if (!isCurrentEditor(box)) return;
       if (data.draft[side] !== box.value) {
         data.draft[side] = box.value;
         data.draft.selection[side] = [box.selectionStart, box.selectionEnd];
         changed();
       }
       requestInline();
-    });
-  });
-  box.addEventListener("compositionend", () => {
-    inlineComposing = false;
+    }),
+  );
+  listen("compositionend", () => {
+    if (data.draft.target === side) inlineComposing = false;
     const modified =
       data.draft[side] !== box.value ||
       data.draft.selection[side][0] !== box.selectionStart ||
@@ -1100,30 +1000,26 @@ for (const side of ["positive", "negative"] as const) {
     data.draft.selection[side] = [box.selectionStart, box.selectionEnd];
     if (modified) changed();
     renderTarget();
-    if (pendingIME?.intent.side === side) {
-      pendingIME.ended = true;
-      settleIMEPick();
-    }
     remember();
     requestInline();
   });
-  box.addEventListener("blur", () => {
+  listen("blur", () => {
     remember();
     void flush();
   });
 }
+for (const side of ["positive", "negative"] as const)
+  bindEditor(side, $<HTMLTextAreaElement>(side));
+
+// Prevent the candidate button from stealing focus. Activation happens on click,
+// so a cancelled touch/scroll never commits a replacement.
 document.addEventListener("pointerdown", (event) => {
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>(
     "button",
   );
   if (!button || button.disabled) return;
-  if (button.dataset.complete) {
-    if (inlineComposing) beginIMEPick(button.dataset.complete);
-    else event.preventDefault();
-  }
-  if (finderOpen && button.dataset.insert && inlineComposing) {
-    beginIMEInsertion([button.dataset.insert]);
-  } else if (
+  if (
+    button.dataset.complete ||
     button.id === "finder-toggle" ||
     (finderOpen &&
       (button.dataset.insert ||
@@ -1131,11 +1027,6 @@ document.addEventListener("pointerdown", (event) => {
         button.dataset.historyDelete))
   )
     event.preventDefault();
-});
-document.addEventListener("pointercancel", () => {
-  cancelIME();
-  renderResults();
-  renderInline();
 });
 
 document.querySelectorAll<HTMLElement>('[role="tablist"]').forEach((group) =>

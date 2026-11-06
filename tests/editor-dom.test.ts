@@ -270,6 +270,140 @@ test("editor DOM integration with synthetic data and composition events", async 
   );
 
   await t.test(
+    "candidate selection without compositionend preserves focus and rejects late events from the old editor",
+    async () => {
+      const box = input("positive", "여자1명", true);
+      box.dispatchEvent(
+        new w.CompositionEvent("compositionstart", { bubbles: true }),
+      );
+      await until(
+        () => !!candidate("1girl") && !candidate("1girl")!.disabled,
+        "uncommitted candidate",
+      );
+      const before = await saved();
+      const button = candidate("1girl")!;
+      if (pointer(button)) button.focus();
+      button.click();
+      await pause(80);
+      const current = $<HTMLTextAreaElement>("positive");
+      assert.equal(
+        current.value,
+        "1girl",
+        "a click must not wait for compositionend",
+      );
+      assert.equal(w.document.activeElement, current);
+      box.value = "여자1명";
+      box.dispatchEvent(
+        new w.InputEvent("input", { bubbles: true, isComposing: true }),
+      );
+      box.dispatchEvent(
+        new w.CompositionEvent("compositionend", { bubbles: true }),
+      );
+      assert.equal(
+        current.value,
+        "1girl",
+        "retired editor events must not restore the old Hangul",
+      );
+      current.dispatchEvent(
+        new w.InputEvent("input", { bubbles: true, isComposing: false }),
+      );
+      assert.equal(
+        w.document.querySelector<HTMLButtonElement>('[data-undo="positive"]')!
+          .disabled,
+        false,
+      );
+      const after = await saved();
+      assert.equal(after.draft.positive, "1girl");
+      assert.equal(
+        after.history.find((row) => row.tag === "1girl")?.uses,
+        (before.history.find((row) => row.tag === "1girl")?.uses ?? 0) + 1,
+      );
+    },
+  );
+
+  await t.test(
+    "scroll cancellation does not apply a tag; the next tap can replace an unfinished middle item",
+    async () => {
+      const box = input("positive", "start, 여자1명, end", true);
+      box.setSelectionRange(11, 11);
+      box.dispatchEvent(new w.Event("select"));
+      box.dispatchEvent(
+        new w.CompositionEvent("compositionstart", { bubbles: true }),
+      );
+      await until(
+        () => !!candidate("1girl") && !candidate("1girl")!.disabled,
+        "middle composing item",
+      );
+      const button = candidate("1girl")!;
+      pointer(button);
+      $("completion-results").scrollTop = 80;
+      $("completion-results").dispatchEvent(new w.Event("scroll"));
+      pointer(button, "pointercancel");
+      assert.equal($<HTMLTextAreaElement>("positive"), box);
+      assert.equal(box.value, "start, 여자1명, end");
+      assert.equal(pointer(button), false);
+      button.click();
+      assert.equal(
+        $<HTMLTextAreaElement>("positive").value,
+        "start, 1girl, end",
+      );
+      assert.equal(w.document.activeElement, $("positive"));
+      assert.equal($("notice").textContent!.includes("입력 확정"), false);
+    },
+  );
+
+  await t.test(
+    "committed text followed by a space uses the same editor and preserves the space",
+    async () => {
+      const box = input("positive", "여자1명 ", false);
+      await until(
+        () => !!candidate("1girl") && !candidate("1girl")!.disabled,
+        "committed spaced candidate",
+      );
+      const button = candidate("1girl")!;
+      pointer(button);
+      button.click();
+      assert.equal($<HTMLTextAreaElement>("positive"), box);
+      assert.equal(box.value, "1girl ");
+      assert.equal(w.document.activeElement, box);
+    },
+  );
+
+  await t.test(
+    "negative completion handover preserves its neighbours and ignores queued old composition updates",
+    async () => {
+      click('[data-target="negative"]');
+      const box = input("negative", "prefix, 파란눈, suffix", true);
+      box.setSelectionRange(11, 11);
+      box.dispatchEvent(new w.Event("select"));
+      box.dispatchEvent(
+        new w.CompositionEvent("compositionstart", { bubbles: true }),
+      );
+      await until(
+        () => !!candidate("blue eyes") && !candidate("blue eyes")!.disabled,
+        "negative composing candidate",
+      );
+      const button = candidate("blue eyes")!;
+      pointer(button);
+      button.click();
+      const current = $<HTMLTextAreaElement>("negative");
+      assert.equal(current.value, "prefix, blue eyes, suffix");
+      assert.equal(w.document.activeElement, current);
+      box.value = "stale negative";
+      box.dispatchEvent(
+        new w.CompositionEvent("compositionupdate", { bubbles: true }),
+      );
+      box.dispatchEvent(
+        new w.CompositionEvent("compositionend", { bubbles: true }),
+      );
+      await pause(10);
+      assert.equal(current.value, "prefix, blue eyes, suffix");
+      assert.equal((await saved()).draft.negative, "prefix, blue eyes, suffix");
+      click('[data-target="positive"]');
+    },
+  );
+
+  await t.test(
     "cancelled pointer and changed composition context never replace the text",
     async () => {
       const box = input("positive", "blue e");
@@ -363,7 +497,7 @@ test("editor DOM integration with synthetic data and composition events", async 
   );
 
   await t.test(
-    "finder insertion also waits for a live composition to end",
+    "finder insertion accepts an unfinished composition without waiting and keeps the panel open",
     async () => {
       const box = input("positive", "여자1명");
       box.dispatchEvent(
@@ -375,18 +509,23 @@ test("editor DOM integration with synthetic data and composition events", async 
       )!;
       assert.ok(button);
       pointer(button);
-      box.dispatchEvent(
-        new w.CompositionEvent("compositionend", { bubbles: true }),
-      );
-      box.dispatchEvent(new w.InputEvent("input", { bubbles: true }));
       button.click();
       await pause(100);
       assert.equal(
-        box.value,
+        $<HTMLTextAreaElement>("positive").value,
         "여자1명, sunlight",
         $("notice").textContent ?? "finder composition insertion",
       );
       assert.equal($("finder-panel").hidden, false);
+      assert.equal(w.document.activeElement, $("positive"));
+      box.value = "stale finder input";
+      box.dispatchEvent(
+        new w.InputEvent("input", { bubbles: true, isComposing: true }),
+      );
+      assert.equal(
+        $<HTMLTextAreaElement>("positive").value,
+        "여자1명, sunlight",
+      );
       click("#finder-close");
     },
   );
