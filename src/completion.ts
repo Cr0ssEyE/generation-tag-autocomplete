@@ -10,6 +10,7 @@ export interface CompletionContext {
 export function completionContext(
   text: string,
   selection: [number, number],
+  allowEmpty = false,
 ): CompletionContext | null {
   const [cursor, end] = selection;
   if (
@@ -35,7 +36,7 @@ export function completionContext(
   const item = text.slice(start, stop);
   if (/[()[\]{}:]/.test(item)) return null;
   const query = item.trim();
-  if (!query) return null;
+  if (!query && !allowEmpty) return null;
   start += item.length - item.trimStart().length;
   return { start, end: start + query.length, query };
 }

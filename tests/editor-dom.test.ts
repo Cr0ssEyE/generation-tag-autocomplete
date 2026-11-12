@@ -437,73 +437,87 @@ test("editor DOM integration with synthetic data and composition events", async 
   );
 
   await t.test(
-    "finder preserves the editor caret while its search field is focused and supports continuous insertion",
+    "integrated tabs preserve drafts, focus and list positions",
     async () => {
-      const box = input("positive", "1girl");
-      box.setSelectionRange(0, 0);
-      box.dispatchEvent(new w.Event("select"));
-      const before = w.document.activeElement;
-      pointer($("finder-toggle"));
-      click("#finder-toggle");
-      assert.equal(w.document.activeElement, before);
-      assert.equal($("finder-toggle").getAttribute("aria-expanded"), "true");
+      assert.equal(w.document.getElementById("finder-toggle"), null);
+      const box = input("positive", "1girl, ");
       click("#search-tab");
       $<HTMLSelectElement>("type-filter").value = "0";
       $("type-filter").dispatchEvent(new w.Event("change"));
       await until(
-        () => !!w.document.querySelector('[data-insert="blue eyes"]'),
-        "type candidates",
+        () =>
+          !!w.document.querySelector(
+            '#completion-results [data-insert="blue eyes"]',
+          ),
+        "empty-item type browsing",
       );
-      $("query").focus();
+      const stale = w.document.querySelector<HTMLButtonElement>(
+        '#completion-results [data-insert="blue eyes"]',
+      )!;
+      input("positive", "(blue:1.2)");
+      stale.click();
+      assert.equal(box.value, "(blue:1.2)");
+      assert.equal(
+        w.document.querySelector("#completion-results [data-insert]"),
+        null,
+      );
+      input("positive", "1girl, ");
+      await until(
+        () =>
+          !!w.document.querySelector(
+            '#completion-results [data-insert="blue eyes"]',
+          ),
+        "browse again",
+      );
+      click('#completion-results [data-insert="blue eyes"]');
+      assert.equal(box.value, "1girl, blue eyes");
+      await until(
+        () => !!candidate("blue eyes"),
+        "replacement mode after insertion",
+      );
       for (const tag of ["blue eyes", "sunlight"]) {
-        const button = w.document.querySelector<HTMLElement>(
-          `#results [data-insert="${tag}"]`,
+        input("positive", tag);
+        await until(() => !!candidate(tag), "bookmark candidate");
+        const star = w.document.querySelector<HTMLButtonElement>(
+          '#completion-results [data-favorite="' + tag + '"]',
         )!;
-        assert.equal(pointer(button), false, "pointer focus is preserved");
-        button.click();
+        if (star.getAttribute("aria-pressed") !== "true") star.click();
       }
+      input("positive", "1girl");
+      box.setSelectionRange(0, 0);
+      box.dispatchEvent(new w.Event("select"));
+      assert.equal(pointer($("bookmark-tab")), false);
+      click("#bookmark-tab");
+      for (const tag of ["blue eyes", "sunlight"])
+        click('#results [data-insert="' + tag + '"]');
       assert.equal(box.value, "blue eyes, sunlight, 1girl");
-      assert.equal(w.document.activeElement, $("query"));
-      assert.equal($("finder-panel").hidden, false);
+      assert.equal(w.document.activeElement, box);
       $("results").scrollTop = 123;
-      click("#finder-close");
-      click("#finder-toggle");
+      click("#history-tab");
+      input("positive", "unrelated input");
+      assert.equal($("history-tab").getAttribute("aria-selected"), "true");
+      click("#bookmark-tab");
       assert.equal($("results").scrollTop, 123);
-      viewport.height = 320;
-      viewport.dispatchEvent(new w.Event("resize"));
-      assert.equal($("finder-panel").classList.contains("compact"), true);
-      assert.equal(
-        w.document.documentElement.style.getPropertyValue("--surface-height"),
-        "264px",
-      );
-      viewport.height = 844;
-      viewport.dispatchEvent(new w.Event("resize"));
-      click('[data-page="library"]');
-      assert.equal($("finder-panel").hidden, true);
-      click('[data-page="editor"]');
-      assert.equal($("finder-panel").hidden, true);
-      $("finder-toggle").click();
-      assert.equal(
-        w.document.activeElement,
-        $("finder-close"),
-        "keyboard activation enters the panel controls",
-      );
-      w.document.dispatchEvent(
-        new w.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
-      );
-      assert.equal(w.document.activeElement, $("finder-toggle"));
-      assert.equal($("finder-panel").hidden, true);
+      assert.ok(w.document.querySelector('#results [data-insert="sunlight"]'));
+      click("#search-tab");
+      $<HTMLSelectElement>("type-filter").value = "4";
+      $("type-filter").dispatchEvent(new w.Event("change"));
+      input("positive", "blue eyes");
+      await pause(200);
+      assert.equal(candidate("blue eyes"), null);
+      $<HTMLSelectElement>("type-filter").value = "";
+      $("type-filter").dispatchEvent(new w.Event("change"));
     },
   );
 
   await t.test(
-    "finder insertion accepts an unfinished composition without waiting and keeps the panel open",
+    "bookmark insertion accepts an unfinished composition without waiting",
     async () => {
       const box = input("positive", "여자1명");
       box.dispatchEvent(
         new w.CompositionEvent("compositionstart", { bubbles: true }),
       );
-      click("#finder-toggle");
+      click("#bookmark-tab");
       const button = w.document.querySelector<HTMLElement>(
         '#results [data-insert="sunlight"]',
       )!;
@@ -516,7 +530,7 @@ test("editor DOM integration with synthetic data and composition events", async 
         "여자1명, sunlight",
         $("notice").textContent ?? "finder composition insertion",
       );
-      assert.equal($("finder-panel").hidden, false);
+      assert.equal($("bookmark-tab").getAttribute("aria-selected"), "true");
       assert.equal(w.document.activeElement, $("positive"));
       box.value = "stale finder input";
       box.dispatchEvent(
@@ -526,7 +540,7 @@ test("editor DOM integration with synthetic data and composition events", async 
         $<HTMLTextAreaElement>("positive").value,
         "여자1명, sunlight",
       );
-      click("#finder-close");
+      click("#search-tab");
     },
   );
 

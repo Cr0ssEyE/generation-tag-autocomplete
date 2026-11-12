@@ -61,7 +61,7 @@ export const freshData = (): AppData => ({
   favorites: [],
   tagGroups: [],
   history: [],
-  settings: { dictionaryId: null, filter: "", tab: "bookmarks" },
+  settings: { dictionaryId: null, filter: "", tab: "search" },
 });
 export const normalize = (s: string) => s.normalize("NFC").trim().toLowerCase();
 export const compact = (s: string) => normalize(s).replace(/\s/gu, "");

@@ -44,20 +44,16 @@ const esc = (value: unknown) =>
   );
 const fmt = (n: number) => n.toLocaleString("ko-KR");
 let data: AppData = freshData(),
-  dictionaries: Dictionary[] = [],
-  results: Row[] = [];
+  dictionaries: Dictionary[] = [];
 let worker: Worker,
   seq = 0,
-  latest = 0,
   loading = false,
   importId = 0,
-  searchTimer = 0,
   saveTimer = 0,
   revision = 0,
   savedRevision = 0;
 let saveQueue = Promise.resolve(),
-  readyToSave = false,
-  composing = false;
+  readyToSave = false;
 let waitingSW: ServiceWorker | null = null;
 let inlineRows: Row[] = [],
   inlineContext: CompletionContext | null = null;
@@ -70,20 +66,19 @@ let inlineKey = "",
   inlineRowsKey = "",
   loadId = 0;
 const inlineQueue = new LatestSearch<{
-  kind: "search";
+  kind: "search" | "browse";
   id: number;
   query: string;
   filter: string;
 }>((request) => worker.postMessage(request));
 let renderedInline = "",
   renderedResults = "";
-let finderOpen = false,
-  finderKeyboard = false;
-let restoreFinderSearch = false;
-type FinderTab = AppData["settings"]["tab"];
-const finderPositions: Partial<
-  Record<FinderTab, { list: number; body: number }>
-> = {};
+type TagTab = AppData["settings"]["tab"];
+const listPositions: Record<TagTab, number> = {
+  search: 0,
+  bookmarks: 0,
+  history: 0,
+};
 let previewPrompt: SavedPromptText | null = null,
   previewBusy = false;
 const undoStack: Record<Side, { text: string; selection: [number, number] }[]> =
@@ -159,7 +154,6 @@ async function flush() {
   return success;
 }
 function page(name: string) {
-  if (name !== "editor") setFinderOpen(false, false, false);
   document
     .querySelectorAll<HTMLElement>(".page")
     .forEach((el) => (el.hidden = el.id !== `page-${name}`));
@@ -214,7 +208,12 @@ function renderTabs() {
     tab.setAttribute("aria-selected", String(active));
     tab.tabIndex = active ? 0 : -1;
   }
-  $("search-controls").hidden = data.settings.tab !== "search";
+  $("search-panel").hidden = data.settings.tab !== "search";
+  $("results").hidden = data.settings.tab === "search";
+  $("results").setAttribute(
+    "aria-labelledby",
+    data.settings.tab === "history" ? "history-tab" : "bookmark-tab",
+  );
   $("history-controls").hidden = data.settings.tab !== "history";
   $("history-count").textContent = fmt(data.history.length);
   renderResults();
@@ -259,13 +258,7 @@ function renderResults() {
     html =
       data.favorites.map((row) => rowHTML(row)).join("") ||
       '<p class="empty-line">태그 옆의 ☆로 북마크를 추가하세요.</p>';
-  else if (!$<HTMLInputElement>("query").value.trim() && !data.settings.filter)
-    html =
-      '<p class="empty-line">유형을 선택하거나 태그·설명을 검색하세요.</p>';
-  else
-    html =
-      results.map((row) => rowHTML(row)).join("") ||
-      `<p class="empty-line">${loading ? "사전 준비 중…" : "일치하는 태그가 없습니다."}</p>`;
+  else return;
   if (html !== renderedResults) {
     $("results").innerHTML = html;
     renderedResults = html;
@@ -277,9 +270,9 @@ function renderInline() {
   if (!data.settings.dictionaryId)
     message = "사전 관리에서 CSV를 가져오거나 선택하세요.";
   else if (loading) message = "사전 준비 중…";
-  else if (!inlineContext)
+  else if (!inlineContext || (!inlineContext.query && !data.settings.filter))
     message =
-      "태그 또는 한글 설명을 입력하세요. 괄호·가중치 구문은 자동완성하지 않습니다.";
+      "태그·설명을 입력하거나 빈 항목에서 유형을 선택하세요. 괄호·가중치 구문은 보호됩니다.";
   else if (!inlineRows.length)
     message = inlinePending ? "검색 중…" : "일치하는 태그가 없습니다.";
   $("completion-status").textContent = inlinePending
@@ -290,35 +283,51 @@ function renderInline() {
   $("completion-results").setAttribute("aria-busy", String(inlinePending));
   const html = message
     ? `<p class="empty-line">${message}</p>`
-    : inlineRows.map((row) => rowHTML(row, false, true)).join("");
+    : inlineRowsKey === inlineKey
+      ? inlineRows
+          .map((row) => rowHTML(row, false, !!inlineContext?.query))
+          .join("")
+      : '<p class="empty-line">검색 중…</p>';
   if (html !== renderedInline) {
     $("completion-results").innerHTML = html;
     renderedInline = html;
   }
-  $("completion-meta").textContent = inlineContext
+  $("completion-help").textContent = inlineContext?.query
+    ? "후보를 선택하면 커서가 있는 항목만 바뀝니다."
+    : "유형 목록에서 선택하면 현재 위치에 태그를 추가합니다.";
+  $("completion-meta").textContent = inlineContext?.query
     ? `현재 항목: ${inlineContext.query}`
-    : "현재 항목의 태그 후보";
+    : "유형 탐색";
 }
 function requestInline() {
   inlineSide = data.draft.target;
   inlineContext = completionContext(
     data.draft[inlineSide],
     data.draft.selection[inlineSide],
+    true,
   );
   const key = JSON.stringify([
     data.settings.dictionaryId,
     inlineSide,
-    inlineContext?.query,
+    inlineContext,
+    data.draft[inlineSide],
+    data.settings.filter,
   ]);
   if (key === inlineKey && !loading && inlineContext) {
     renderInline();
     return;
   }
+  listPositions.search = 0;
+  $("completion-results").scrollTop = 0;
   inlineKey = key;
   window.clearTimeout(inlineTimer);
   inlineQueue.clear();
   latestInline = ++seq;
-  inlinePending = !loading && !!inlineContext && !!data.settings.dictionaryId;
+  inlinePending =
+    !loading &&
+    !!inlineContext &&
+    (!!inlineContext.query || !!data.settings.filter) &&
+    !!data.settings.dictionaryId;
   if (!inlinePending) {
     inlineRows = [];
     inlineRowsKey = "";
@@ -327,9 +336,16 @@ function requestInline() {
   }
   renderInline();
   const id = latestInline,
-    query = inlineContext!.query;
+    query = inlineContext!.query,
+    filter = data.settings.filter;
   inlineTimer = window.setTimeout(
-    () => inlineQueue.submit({ kind: "search", id, query, filter: "" }),
+    () =>
+      inlineQueue.submit({
+        kind: query ? "search" : "browse",
+        id,
+        query,
+        filter,
+      }),
     120,
   );
 }
@@ -431,28 +447,6 @@ function publishInsertion(side: Side, result: ReturnType<typeof insertTags>) {
     `${result.inserted.length}개 태그를 ${side === "positive" ? "긍정" : "부정"} 프롬프트에 추가했습니다.`,
   );
 }
-function requestSearch() {
-  restoreFinderSearch = false;
-  window.clearTimeout(searchTimer);
-  if (composing) return;
-  const query = $<HTMLInputElement>("query").value;
-  latest = ++seq;
-  results = [];
-  renderResults();
-  if (
-    loading ||
-    !data.settings.dictionaryId ||
-    (!query.trim() && !data.settings.filter)
-  )
-    return;
-  const id = latest,
-    filter = data.settings.filter;
-  searchTimer = window.setTimeout(
-    () => worker.postMessage({ kind: "browse", id, query, filter }),
-    120,
-  );
-}
-
 function startWorker() {
   inlineQueue.reset();
   worker = new Worker(new URL("./dictionary.worker.ts", import.meta.url), {
@@ -478,11 +472,12 @@ function startWorker() {
     }
     if (message.kind === "imported" && message.id === importId) {
       loading = false;
+      if (data.settings.dictionaryId !== message.meta.id)
+        data.settings.filter = "";
       data.settings.dictionaryId = message.meta.id;
       dictionaries = await listDictionaries();
       renderDictionaries();
       changed();
-      requestSearch();
       requestInline();
       $("import-status").textContent =
         `완료 · ${fmt(message.report.valid)}개 태그 / 건너뜀 ${fmt(message.report.skipped)} / 중복 ${fmt(message.report.duplicates)}`;
@@ -494,19 +489,9 @@ function startWorker() {
     if (message.kind === "loaded" && message.id === loadId) {
       loading = false;
       inlineKey = "";
-      requestSearch();
       requestInline();
     }
-    if (message.kind === "browse-results" && message.id === latest) {
-      results = message.rows;
-      $("search-meta").textContent = `${results.length}개 후보`;
-      renderResults();
-      if (restoreFinderSearch) {
-        restoreFinderPosition();
-        restoreFinderSearch = false;
-      }
-    }
-    if (message.kind === "results") {
+    if (message.kind === "results" || message.kind === "browse-results") {
       if (message.id === latestInline) {
         inlinePending = false;
         inlineRows = message.rows;
@@ -517,8 +502,7 @@ function startWorker() {
     }
     if (message.kind === "error") {
       inlineQueue.finish(message.id);
-      if (![loadId, importId, latestInline, latest].includes(message.id))
-        return;
+      if (![loadId, importId, latestInline].includes(message.id)) return;
       loading = false;
       inlinePending = false;
       inlineRows = [];
@@ -545,8 +529,6 @@ async function loadActive() {
   inlineKey = "";
   inlineRowsKey = "";
   loading = true;
-  latest = ++seq;
-  window.clearTimeout(searchTimer);
   window.clearTimeout(inlineTimer);
   latestInline = ++seq;
   inlineRows = [];
@@ -571,7 +553,6 @@ function importFile(file: File, replaceId?: string) {
   inlineQueue.reset();
   inlineKey = inlineRowsKey = "";
   window.clearTimeout(inlineTimer);
-  latest = ++seq;
   latestInline = ++seq;
   inlineRows = [];
   renderInline();
@@ -582,6 +563,13 @@ function importFile(file: File, replaceId?: string) {
 }
 function renderDictionaries() {
   const active = dictionaries.find((x) => x.id === data.settings.dictionaryId);
+  if (
+    data.settings.filter &&
+    !active?.categories.some((c) => String(c) === data.settings.filter)
+  ) {
+    data.settings.filter = "";
+    changed();
+  }
   $("dictionary-label").textContent = active
     ? `${fmt(active.count)}개 태그`
     : "사전 없음";
@@ -732,66 +720,6 @@ $("preview-load").onclick = async () => {
   }
 };
 
-function saveFinderPosition() {
-  finderPositions[data.settings.tab] = {
-    list: $("results").scrollTop,
-    body: $("finder-body").scrollTop,
-  };
-}
-function restoreFinderPosition() {
-  const position = finderPositions[data.settings.tab];
-  $("results").scrollTop = position?.list ?? 0;
-  $("finder-body").scrollTop = position?.body ?? 0;
-}
-function setFinderOpen(open: boolean, keyboard = false, returnFocus = true) {
-  if (open === finderOpen) return;
-  if (open) {
-    const box = $<HTMLTextAreaElement>(data.draft.target);
-    if (document.activeElement === box) {
-      data.draft.selection[data.draft.target] = [
-        box.selectionStart,
-        box.selectionEnd,
-      ];
-    }
-    finderKeyboard = keyboard;
-  } else saveFinderPosition();
-  finderOpen = open;
-  $("finder-panel").hidden = $("finder-scrim").hidden = !open;
-  $("finder-toggle").setAttribute("aria-expanded", String(open));
-  $("finder-toggle").setAttribute(
-    "aria-label",
-    open ? "태그 찾기 닫기" : "태그 찾기 열기",
-  );
-  document.documentElement.classList.toggle("finder-open", open);
-  updateKeyboardLayout();
-  if (open) {
-    renderResults();
-    restoreFinderPosition();
-    if (keyboard) $("finder-close").focus({ preventScroll: true });
-  } else if (
-    returnFocus &&
-    (finderKeyboard || $("finder-panel").contains(document.activeElement))
-  ) {
-    $("finder-toggle").focus({ preventScroll: true });
-  }
-}
-$("finder-toggle").onclick = (event) =>
-  setFinderOpen(!finderOpen, event.detail === 0);
-$("finder-close").onclick = () => setFinderOpen(false);
-$("finder-scrim").onclick = () => setFinderOpen(false);
-document.addEventListener("keydown", (event) => {
-  if (
-    event.key === "Escape" &&
-    finderOpen &&
-    !event.isComposing &&
-    !$<HTMLDialogElement>("name-dialog").open &&
-    !preview.open
-  ) {
-    event.preventDefault();
-    setFinderOpen(false);
-  }
-});
-
 async function storageInfo() {
   try {
     const estimate = await navigator.storage.estimate();
@@ -847,7 +775,19 @@ document.addEventListener("click", async (event) => {
       requestInline();
     }
   }
-  if (ds.insert) insert([ds.insert]);
+  if (ds.insert) {
+    if (
+      !button.closest("#completion-results") ||
+      (inlineRowsKey === inlineKey &&
+        inlineContext?.query === "" &&
+        completionContext(
+          $<HTMLTextAreaElement>(inlineSide).value,
+          data.draft.selection[inlineSide],
+          true,
+        )?.query === "")
+    )
+      insert([ds.insert]);
+  }
   if (ds.favorite) {
     const existing = data.favorites.findIndex((x) => x.tag === ds.favorite);
     if (existing < 0)
@@ -1020,9 +960,9 @@ document.addEventListener("pointerdown", (event) => {
   if (!button || button.disabled) return;
   if (
     button.dataset.complete ||
-    button.id === "finder-toggle" ||
-    (finderOpen &&
-      (button.dataset.insert ||
+    (document.activeElement instanceof HTMLTextAreaElement &&
+      (button.closest(".tag-tabs") ||
+        button.dataset.insert ||
         button.dataset.favorite ||
         button.dataset.historyDelete))
   )
@@ -1047,45 +987,29 @@ document.querySelectorAll<HTMLElement>('[role="tablist"]').forEach((group) =>
     tabs[next].click();
   }),
 );
-const query = $<HTMLInputElement>("query");
-query.addEventListener("compositionstart", () => {
-  composing = true;
-  window.clearTimeout(searchTimer);
-  latest = ++seq;
-});
-query.addEventListener("compositionend", () => {
-  composing = false;
-  requestSearch();
-});
-query.addEventListener("input", requestSearch);
 $("type-filter").addEventListener("change", () => {
   data.settings.filter = $<HTMLSelectElement>("type-filter").value;
   changed();
-  requestSearch();
+  requestInline();
 });
-$("search-tab").onclick = () => {
-  saveFinderPosition();
-  data.settings.tab = "search";
-  renderTabs();
-  restoreFinderPosition();
-  requestSearch();
-  restoreFinderSearch = true;
-  changed();
-};
-$("bookmark-tab").onclick = () => {
-  saveFinderPosition();
-  data.settings.tab = "bookmarks";
-  renderTabs();
-  restoreFinderPosition();
-  changed();
-};
-$("history-tab").onclick = () => {
-  saveFinderPosition();
-  data.settings.tab = "history";
-  renderTabs();
-  restoreFinderPosition();
-  changed();
-};
+for (const [id, tab] of [
+  ["search-tab", "search"],
+  ["bookmark-tab", "bookmarks"],
+  ["history-tab", "history"],
+] as const) {
+  $(id).onclick = () => {
+    const previous = data.settings.tab;
+    listPositions[previous] = $(
+      previous === "search" ? "completion-results" : "results",
+    ).scrollTop;
+    data.settings.tab = tab;
+    renderTabs();
+    requestInline();
+    $(tab === "search" ? "completion-results" : "results").scrollTop =
+      listPositions[tab];
+    changed();
+  };
+}
 $("clear-history").onclick = () => {
   if (confirm("사용 기록만 모두 삭제할까요?")) {
     data.history = [];
@@ -1216,28 +1140,15 @@ function updateKeyboardLayout() {
     left = viewport?.offsetLeft ?? 0;
   const height = viewport?.height ?? window.innerHeight,
     width = viewport?.width ?? window.innerWidth;
-  const surfaceTop = Math.max(
-    top,
-    document.querySelector(".main-nav")!.getBoundingClientRect().bottom,
-  );
-  const surfaceHeight = Math.max(0, top + height - surfaceTop);
-  const finderWidth = Math.min(480, Math.max(0, width - 56));
   const values = {
     "--view-left": left,
     "--view-width": width,
     "--view-center": left + width / 2,
-    "--surface-top": surfaceTop,
-    "--surface-height": surfaceHeight,
-    "--finder-width": finderWidth,
-    "--finder-left": left + width - 56 - finderWidth,
-    "--finder-button-left": left + width - 50,
-    "--finder-button-top": surfaceTop + Math.max(0, (surfaceHeight - 56) / 2),
     "--dialog-top": top + 12,
     "--dialog-height": Math.max(0, height - 24),
   };
   for (const [name, value] of Object.entries(values))
     document.documentElement.style.setProperty(name, `${value}px`);
-  $("finder-panel").classList.toggle("compact", surfaceHeight < 400);
   document.body.classList.toggle(
     "keyboard-open",
     !!window.visualViewport &&

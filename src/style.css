@@ -364,54 +364,6 @@ a {
 .description[open] p {
   margin: 7px 0 0;
 }
-.finder-toggle {
-  position: fixed;
-  z-index: 45;
-  left: var(--finder-button-left, calc(100% - 50px));
-  top: var(--finder-button-top, 45vh);
-  min-width: 44px;
-  min-height: 56px;
-  width: 44px;
-  padding: 6px;
-  line-height: 1.5;
-  background: var(--green);
-  color: #fff;
-  border-color: var(--green);
-  box-shadow: 0 2px 9px #142c2630;
-  transform: translateX(calc(0px - env(safe-area-inset-right, 0px)));
-}
-.finder-toggle:hover {
-  background: #105448;
-}
-.finder-toggle[aria-expanded="true"] {
-  background: #fff;
-  color: var(--green);
-}
-.finder-scrim {
-  position: fixed;
-  z-index: 39;
-  top: var(--surface-top, 56px);
-  left: var(--view-left, 0px);
-  width: var(--view-width, 100%);
-  height: var(--surface-height, calc(100dvh - 56px));
-  background: #142c2644;
-  touch-action: none;
-}
-.finder {
-  position: fixed;
-  z-index: 40;
-  top: var(--surface-top, 56px);
-  left: var(--finder-left, 0px);
-  width: var(--finder-width, calc(100% - 56px));
-  height: var(--surface-height, calc(100dvh - 56px));
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 5px 35px #142c2633;
-  border-radius: 0 10px 10px 0;
-  overscroll-behavior: contain;
-  padding-bottom: env(safe-area-inset-bottom, 0px);
-}
-.finder-title,
 .preview-header {
   display: flex;
   align-items: center;
@@ -421,35 +373,7 @@ a {
   flex-shrink: 0;
   border-bottom: 1px solid var(--border);
 }
-.finder-title button {
-  min-height: 44px;
-}
-.finder-body {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  flex: 1;
-}
-.finder-controls {
-  flex-shrink: 0;
-}
-.finder .results {
-  flex: 1;
-  min-height: 0;
-  max-height: none;
-}
-.finder.compact .finder-body {
-  display: block;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-.finder.compact .results {
-  overflow: visible;
-}
-html.finder-open {
-  overflow: hidden;
-}
-.finder-heading {
+.tag-list-heading {
   padding: 14px 18px;
   display: flex;
   justify-content: space-between;
@@ -480,14 +404,6 @@ html.finder-open {
 .toggle span {
   margin-left: 4px;
   font-size: 11px;
-}
-.search-box {
-  display: block;
-  margin: 0 18px;
-}
-.search-box input {
-  width: 100%;
-  font-size: 13px;
 }
 .filter-line {
   display: flex;
@@ -904,5 +820,31 @@ dialog .actions {
 @media (prefers-reduced-motion: reduce) {
   * {
     scroll-behavior: auto !important;
+  }
+}
+
+.tag-tabs {
+  margin: 12px 14px 0;
+}
+.tag-tabs button {
+  min-height: 44px;
+}
+#completion-meta {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+#search-controls {
+  padding-top: 0;
+}
+.keyboard-open .app-header {
+  padding: 6px 3px;
+}
+.keyboard-open .app-header p {
+  display: none;
+}
+@media (max-height: 500px) {
+  .completion-results {
+    max-height: 180px;
   }
 }

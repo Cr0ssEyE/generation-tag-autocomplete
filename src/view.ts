@@ -32,35 +32,23 @@ export const view = `
         <textarea id="negative" aria-label="부정 프롬프트" aria-describedby="completion-help" placeholder="제외할 태그 또는 한글 설명 입력" spellcheck="false" autocapitalize="off"></textarea>
         <div class="editor-foot"><span>쉼표 · 줄바꿈으로 항목 구분</span><span id="negative-count">0자</span></div>
       </div>
-      <section class="completion-panel" aria-label="입력 중 자동완성">
-        <div class="completion-heading"><h3>자동완성</h3><span id="completion-meta" class="muted small">현재 항목의 태그 후보</span></div>
-        <p id="completion-status" class="completion-status" role="status"></p>
-        <div id="completion-results" class="completion-results" aria-live="polite" aria-busy="false"></div>
-        <p id="completion-help" class="completion-help">후보를 선택하면 커서가 있는 항목만 바뀝니다.</p>
-      </section>
-    </section>
-
-    <button id="finder-toggle" class="finder-toggle" aria-controls="finder-panel" aria-expanded="false" aria-label="태그 찾기 열기">태그<br>찾기</button>
-    <div id="finder-scrim" class="finder-scrim" hidden></div>
-    <aside id="finder-panel" class="panel finder" aria-labelledby="finder-title" hidden>
-      <div class="finder-title"><h2 id="finder-title">태그 찾기</h2><button id="finder-close" aria-label="태그 찾기 닫기">닫기</button></div>
-      <div id="finder-body" class="finder-body">
-        <div class="finder-controls">
-        <div class="finder-heading"><span id="dictionary-label" class="muted small">사전 없음</span><span class="small">삽입 대상: <strong id="target-label">긍정</strong></span></div>
-        <div class="toggle" role="tablist" aria-label="태그 목록">
-          <button id="bookmark-tab" role="tab" aria-selected="true">북마크</button>
-          <button id="search-tab" role="tab" aria-selected="false" tabindex="-1">유형 탐색</button>
-          <button id="history-tab" role="tab" aria-selected="false" tabindex="-1">기록 <span id="history-count">0</span></button>
+      <section class="completion-panel" aria-label="태그 목록">
+        <div class="toggle tag-tabs" role="tablist" aria-label="태그 목록">
+          <button id="search-tab" role="tab" aria-selected="true" aria-controls="search-panel">자동완성</button>
+          <button id="bookmark-tab" role="tab" aria-selected="false" aria-controls="results">북마크</button>
+          <button id="history-tab" role="tab" aria-selected="false" aria-controls="results">기록 <span id="history-count">0</span></button>
         </div>
-        <div id="search-controls" hidden>
-          <label class="search-box"><input id="query" type="search" placeholder="태그 또는 설명으로 좁히기" aria-label="태그 검색" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
-          <div class="filter-line"><select id="type-filter" aria-label="유형 필터"><option value="">모든 유형</option></select><span id="search-meta" class="muted small">유형을 선택하거나 검색어 입력</span></div>
+        <div class="tag-list-heading"><span id="dictionary-label" class="muted small">사전 없음</span><span class="small">삽입 대상: <strong id="target-label">긍정</strong></span></div>
+        <div id="search-panel" role="tabpanel" aria-labelledby="search-tab">
+          <div id="search-controls" class="filter-line"><select id="type-filter" aria-label="유형 필터"><option value="">모든 유형</option></select><span id="completion-meta" class="muted small"></span></div>
+          <p id="completion-status" class="completion-status" role="status"></p>
+          <div id="completion-results" class="completion-results" aria-live="polite"></div>
+          <p id="completion-help" class="completion-help">후보를 선택하면 커서가 있는 항목만 바뀝니다.</p>
         </div>
         <div id="history-controls" class="filter-line" hidden><span class="muted small">최근 사용순 · 최대 1,000개</span><button id="clear-history" class="text-button">기록 비우기</button></div>
-        </div>
-        <div id="results" class="results" aria-live="polite"></div>
-      </div>
-    </aside>
+        <div id="results" class="completion-results" role="tabpanel" aria-live="polite" hidden></div>
+      </section>
+    </section>
   </section>
 
   <section id="page-dictionary" class="page" hidden>
@@ -94,7 +82,7 @@ export const view = `
       <section class="panel settings-panel"><h3>홈 화면 · 오프라인</h3><p id="offline-status">앱 리소스 준비 중…</p><button id="install-app" hidden>홈 화면에 설치</button><p class="small muted">설치 버튼이 없으면 Chrome 메뉴의 ‘홈 화면에 추가’를 사용하세요.</p><a href="./LICENSE" target="_blank" rel="noopener">MIT 라이선스</a> · <a href="./THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener">외부 저작물 고지</a></section>
     </div>
   </section>
-  <footer class="footer">Generation Tag AutoComplete · 0.3.1</footer>
+  <footer class="footer">Generation Tag AutoComplete · 0.4.0</footer>
 </main>
 <dialog id="name-dialog"><form method="dialog"><h2 id="dialog-title">이름을 붙여 저장</h2><label>이름<input id="item-name" maxlength="100" required autocomplete="off"></label><div class="actions"><button value="cancel" formnovalidate>취소</button><button value="save" class="primary">저장</button></div></form></dialog>
 <dialog id="prompt-preview" class="prompt-preview" aria-labelledby="prompt-preview-title">
